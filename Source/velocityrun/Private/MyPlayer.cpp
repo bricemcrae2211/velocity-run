@@ -1,10 +1,10 @@
 #include "MyPlayer.h"
-
-#include "Components/CapsuleComponent.h"
-#include "GameFramework/CharacterMovementComponent.h"
-#include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
-
+#include "EnhancedInputComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "TimerManager.h"
+#include "GameFramework/CharacterMovementComponent.h" // ? ADD THIS
+// ================= CONSTRUCTOR =================
 AMyPlayer::AMyPlayer()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -14,56 +14,166 @@ AMyPlayer::AMyPlayer()
 	GetCapsuleComponent()->SetSimulatePhysics(true);
 	GetCapsuleComponent()->SetEnableGravity(false);
 
-	bFlying = false;
+	// ?? Fire muzzle setup
+	MuzzlePoint = CreateDefaultSubobject<USceneComponent>(TEXT("MuzzlePoint"));
+	MuzzlePoint->SetupAttachment(GetMesh());
 }
 
+// ================= BEGIN PLAY =================
 void AMyPlayer::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	CurrentMaxSpeed = StartSpeed;
+
+	GetWorldTimerManager().SetTimer(
+		SpeedTimerHandle,
+		this,
+		&AMyPlayer::IncreaseSpeed,
+		SpeedIncreaseInterval,
+		true
+	);
+
+	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
-		if (ULocalPlayer* LP = PC->GetLocalPlayer())
+		if (PlayerMappingContext)
 		{
 			if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
-				LP->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
+				ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(
+					PlayerController->GetLocalPlayer()))
 			{
-				Subsystem->AddMappingContext(MappingContext, 0);
+				Subsystem->AddMappingContext(PlayerMappingContext, 0);
 			}
 		}
 	}
 }
 
+// ================= SPEED =================
+void AMyPlayer::IncreaseSpeed()
+{
+	CurrentMaxSpeed += SpeedIncreaseAmount;
+
+	if (CurrentMaxSpeed > MaxSpeedLimit)
+	{
+		CurrentMaxSpeed = MaxSpeedLimit;
+	}
+}
+
+// ================= TICK =================
 void AMyPlayer::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	// ONLY UP / DOWN FLY
-	if (bFlying)
+	FVector Velocity = GetCapsuleComponent()->GetPhysicsLinearVelocity();
+
+	// ================= FORWARD (NEVER CHANGED BY ANYTHING) =================
+	Velocity.X = CurrentMaxSpeed;
+
+	// ================= JETPACK (ONLY Z) =================
+	if (bIsFiring)
 	{
-		FVector Up = FVector(0.f, 0.f, 1.f);
-		GetCapsuleComponent()->AddForce(Up * FlyForce);
+		Velocity.Z += 200.f;
+
+		if (Velocity.Z > 5000.f)
+		{
+			Velocity.Z = 5000.f;
+		}
 	}
+
+	// APPLY DIRECTLY
+	GetCapsuleComponent()->SetPhysicsLinearVelocity(Velocity);
 }
 
+// ================= INPUT =================
 void AMyPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
-	if (UEnhancedInputComponent* Input =
-		CastChecked<UEnhancedInputComponent>(PlayerInputComponent))
+	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(PlayerInputComponent);
+
+	if (EnhancedInput)
 	{
-		Input->BindAction(FlyAction, ETriggerEvent::Started, this, &AMyPlayer::StartFly);
-		Input->BindAction(FlyAction, ETriggerEvent::Completed, this, &AMyPlayer::StopFly);
+		// JETPACK
+		if (JetpackAction)
+		{
+			EnhancedInput->BindAction(JetpackAction, ETriggerEvent::Started, this, &AMyPlayer::JetpackStart);
+			EnhancedInput->BindAction(JetpackAction, ETriggerEvent::Completed, this, &AMyPlayer::JetpackStop);
+		}
+
+		// FIRE (SEPARATE)
+		if (FireAction)
+		{
+			EnhancedInput->BindAction(FireAction, ETriggerEvent::Started, this, &AMyPlayer::StartFire);
+			EnhancedInput->BindAction(FireAction, ETriggerEvent::Completed, this, &AMyPlayer::StopFire);
+		}
 	}
 }
 
-void AMyPlayer::StartFly()
+// ================= JETPACK =================
+void AMyPlayer::JetpackStart()
 {
-	bFlying = true;
+	bIsFiring = true;
+	UE_LOG(LogTemp, Warning, TEXT("JETPACK ON"));
 }
 
-void AMyPlayer::StopFly()
+void AMyPlayer::JetpackStop()
 {
-	bFlying = false;
+	bIsFiring = false;
+	UE_LOG(LogTemp, Warning, TEXT("JETPACK OFF"));
+}
+
+// ================= FIRE SYSTEM =================
+void AMyPlayer::StartFire()
+{
+	if (bIsShooting) return;
+
+	bIsShooting = true;
+
+	UE_LOG(LogTemp, Warning, TEXT("FIRE START"));
+
+	Fire();
+
+	GetWorldTimerManager().SetTimer(
+		FireTimerHandle,
+		this,
+		&AMyPlayer::Fire,
+		FireRate,
+		true
+	);
+}
+
+void AMyPlayer::StopFire()
+{
+	bIsShooting = false;
+
+	UE_LOG(LogTemp, Warning, TEXT("FIRE STOP"));
+
+	GetWorldTimerManager().ClearTimer(FireTimerHandle);
+}
+
+void AMyPlayer::Fire()
+{
+	if (!bIsShooting) return;
+
+	if (!ProjectileClass || !MuzzlePoint)
+		return;
+
+	UWorld* World = GetWorld();
+	if (!World) return;
+
+	FVector SpawnLocation = MuzzlePoint->GetComponentLocation();
+	FRotator SpawnRotation = GetControlRotation();
+
+	FActorSpawnParameters Params;
+	Params.Owner = this;
+	Params.Instigator = GetInstigator();
+
+	World->SpawnActor<AActor>(
+		ProjectileClass,
+		SpawnLocation,
+		SpawnRotation,
+		Params
+	);
+
+	UE_LOG(LogTemp, Warning, TEXT("FIRE"));
 }
