@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "InputActionValue.h"
 #include "MyPlayer.generated.h"
 
 class UInputMappingContext;
@@ -23,7 +24,6 @@ public:
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
 	// ================= SPEED =================
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speed")
 	float StartSpeed = 600.0f;
 
@@ -41,36 +41,23 @@ public:
 
 	void IncreaseSpeed();
 
-	// ================= MOVEMENT =================
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
-	float ForceStrength = 200000.0f;
-
 	// ================= INPUT =================
-
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
 	UInputMappingContext* PlayerMappingContext;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
 	UInputAction* JetpackAction;
 
-
-
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
 	UInputAction* FireAction;
 
 	// ================= JETPACK =================
-
 	bool bIsFiring = false;
 
-	UFUNCTION()
 	void JetpackStart();
-
-	UFUNCTION()
 	void JetpackStop();
 
 	// ================= FIRE =================
-
 	UPROPERTY(EditDefaultsOnly, Category = "Fire")
 	TSubclassOf<AActor> ProjectileClass;
 
@@ -85,4 +72,27 @@ public:
 	void StartFire();
 	void StopFire();
 	void Fire();
+
+	// ================= GRAVITY GUN =================
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	UInputAction* GravityGunAction;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GravityGun")
+	TArray<TSubclassOf<AActor>> HoldableObjects;
+	UPROPERTY()
+	TArray<AActor*> HeldObjects;
+
+	UPROPERTY(EditAnywhere, Category = "GravityGun")
+	float GrabRange = 300.f;
+
+	UPROPERTY(EditAnywhere, Category = "GravityGun")
+	float HoldDistance = 300.f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GravityGun")
+	float SpeedMultiplier = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GravityGun")
+	float ExtraForce = 500.f;
+	bool bHolding = false;
+
+	void GravityGunPressed();
+	void UpdateHeldObject();
 };

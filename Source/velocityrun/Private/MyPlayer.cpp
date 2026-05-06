@@ -2,8 +2,12 @@
 #include "EnhancedInputSubsystems.h"
 #include "EnhancedInputComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "TimerManager.h"
-#include "GameFramework/CharacterMovementComponent.h" // ? ADD THIS
+#include "Kismet/GameplayStatics.h"
+#include "EngineUtils.h"
+#include "MyMissile.h"
+
 // ================= CONSTRUCTOR =================
 AMyPlayer::AMyPlayer()
 {
@@ -14,7 +18,6 @@ AMyPlayer::AMyPlayer()
 	GetCapsuleComponent()->SetSimulatePhysics(true);
 	GetCapsuleComponent()->SetEnableGravity(false);
 
-	// ?? Fire muzzle setup
 	MuzzlePoint = CreateDefaultSubobject<USceneComponent>(TEXT("MuzzlePoint"));
 	MuzzlePoint->SetupAttachment(GetMesh());
 }
@@ -34,13 +37,12 @@ void AMyPlayer::BeginPlay()
 		true
 	);
 
-	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
 		if (PlayerMappingContext)
 		{
 			if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
-				ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(
-					PlayerController->GetLocalPlayer()))
+				ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
 			{
 				Subsystem->AddMappingContext(PlayerMappingContext, 0);
 			}
@@ -54,9 +56,7 @@ void AMyPlayer::IncreaseSpeed()
 	CurrentMaxSpeed += SpeedIncreaseAmount;
 
 	if (CurrentMaxSpeed > MaxSpeedLimit)
-	{
 		CurrentMaxSpeed = MaxSpeedLimit;
-	}
 }
 
 // ================= TICK =================
@@ -65,23 +65,22 @@ void AMyPlayer::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 
 	FVector Velocity = GetCapsuleComponent()->GetPhysicsLinearVelocity();
-
-	// ================= FORWARD (NEVER CHANGED BY ANYTHING) =================
 	Velocity.X = CurrentMaxSpeed;
 
-	// ================= JETPACK (ONLY Z) =================
 	if (bIsFiring)
 	{
 		Velocity.Z += 200.f;
-
 		if (Velocity.Z > 5000.f)
-		{
 			Velocity.Z = 5000.f;
-		}
 	}
 
-	// APPLY DIRECTLY
 	GetCapsuleComponent()->SetPhysicsLinearVelocity(Velocity);
+
+	// ================= GRAVITY GUN HOLD =================
+	if (HeldObjects.Num() > 0)
+	{
+		UpdateHeldObject();
+	}
 }
 
 // ================= INPUT =================
@@ -89,23 +88,25 @@ void AMyPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
-	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(PlayerInputComponent);
+	UEnhancedInputComponent* Input = Cast<UEnhancedInputComponent>(PlayerInputComponent);
 
-	if (EnhancedInput)
+	if (!Input) return;
+
+	if (JetpackAction)
 	{
-		// JETPACK
-		if (JetpackAction)
-		{
-			EnhancedInput->BindAction(JetpackAction, ETriggerEvent::Started, this, &AMyPlayer::JetpackStart);
-			EnhancedInput->BindAction(JetpackAction, ETriggerEvent::Completed, this, &AMyPlayer::JetpackStop);
-		}
+		Input->BindAction(JetpackAction, ETriggerEvent::Started, this, &AMyPlayer::JetpackStart);
+		Input->BindAction(JetpackAction, ETriggerEvent::Completed, this, &AMyPlayer::JetpackStop);
+	}
 
-		// FIRE (SEPARATE)
-		if (FireAction)
-		{
-			EnhancedInput->BindAction(FireAction, ETriggerEvent::Started, this, &AMyPlayer::StartFire);
-			EnhancedInput->BindAction(FireAction, ETriggerEvent::Completed, this, &AMyPlayer::StopFire);
-		}
+	if (FireAction)
+	{
+		Input->BindAction(FireAction, ETriggerEvent::Started, this, &AMyPlayer::StartFire);
+		Input->BindAction(FireAction, ETriggerEvent::Completed, this, &AMyPlayer::StopFire);
+	}
+
+	if (GravityGunAction)
+	{
+		Input->BindAction(GravityGunAction, ETriggerEvent::Started, this, &AMyPlayer::GravityGunPressed);
 	}
 }
 
@@ -113,24 +114,19 @@ void AMyPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 void AMyPlayer::JetpackStart()
 {
 	bIsFiring = true;
-	UE_LOG(LogTemp, Warning, TEXT("JETPACK ON"));
 }
 
 void AMyPlayer::JetpackStop()
 {
 	bIsFiring = false;
-	UE_LOG(LogTemp, Warning, TEXT("JETPACK OFF"));
 }
 
-// ================= FIRE SYSTEM =================
+// ================= FIRE =================
 void AMyPlayer::StartFire()
 {
 	if (bIsShooting) return;
 
 	bIsShooting = true;
-
-	UE_LOG(LogTemp, Warning, TEXT("FIRE START"));
-
 	Fire();
 
 	GetWorldTimerManager().SetTimer(
@@ -145,35 +141,115 @@ void AMyPlayer::StartFire()
 void AMyPlayer::StopFire()
 {
 	bIsShooting = false;
-
-	UE_LOG(LogTemp, Warning, TEXT("FIRE STOP"));
-
 	GetWorldTimerManager().ClearTimer(FireTimerHandle);
 }
 
 void AMyPlayer::Fire()
 {
-	if (!bIsShooting) return;
+	if (!bIsShooting || !ProjectileClass || !MuzzlePoint) return;
 
-	if (!ProjectileClass || !MuzzlePoint)
-		return;
-
-	UWorld* World = GetWorld();
-	if (!World) return;
-
-	FVector SpawnLocation = MuzzlePoint->GetComponentLocation();
-	FRotator SpawnRotation = GetControlRotation();
-
-	FActorSpawnParameters Params;
-	Params.Owner = this;
-	Params.Instigator = GetInstigator();
-
-	World->SpawnActor<AActor>(
+	GetWorld()->SpawnActor<AActor>(
 		ProjectileClass,
-		SpawnLocation,
-		SpawnRotation,
-		Params
+		MuzzlePoint->GetComponentLocation(),
+		GetControlRotation()
 	);
+}
 
-	UE_LOG(LogTemp, Warning, TEXT("FIRE"));
+// ================= GRAVITY GUN =================
+void AMyPlayer::GravityGunPressed()
+{
+	// ================= RELEASE =================
+	if (HeldObjects.Num() > 0)
+	{
+		FVector PlayerVel = GetVelocity();
+		float PlayerSpeed = PlayerVel.Size();
+		FVector ForwardDir = GetActorForwardVector();
+
+		// one clean direction
+		FVector LaunchDir = (ForwardDir + PlayerVel.GetSafeNormal()).GetSafeNormal();
+
+		for (AActor* Obj : HeldObjects)
+		{
+			if (!Obj) continue;
+
+			if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Obj->GetRootComponent()))
+			{
+				Prim->SetSimulatePhysics(true);
+
+				// ?? FORCE BASED ON PLAYER SPEED
+				float TotalForce = (PlayerSpeed * SpeedMultiplier) + ExtraForce + 1000.f;
+
+				FVector FinalImpulse = LaunchDir * TotalForce;
+
+				// ignore mass ? strong throw
+				Prim->AddImpulse(FinalImpulse, NAME_None, true);
+			}
+		}
+
+		HeldObjects.Empty();
+		return;
+	}
+
+	// ================= GRAB =================
+	AActor* Closest = nullptr;
+	float BestDist = GrabRange;
+
+	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+	{
+		AActor* A = *It;
+		if (!A || A == this) continue;
+
+		bool bIsHoldable = false;
+
+		for (TSubclassOf<AActor> Type : HoldableObjects)
+		{
+			if (A->IsA(Type))
+			{
+				bIsHoldable = true;
+				break;
+			}
+		}
+
+		if (!bIsHoldable) continue;
+
+		float Dist = FVector::Dist(GetActorLocation(), A->GetActorLocation());
+
+		if (Dist < BestDist)
+		{
+			BestDist = Dist;
+			Closest = A;
+		}
+	}
+
+	if (Closest)
+	{
+		HeldObjects.Add(Closest);
+
+		if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Closest->GetRootComponent()))
+		{
+			Prim->SetSimulatePhysics(false);
+		}
+
+		// ?? mark missile as held (never reset)
+		if (AMyMissile* Missile = Cast<AMyMissile>(Closest))
+		{
+			Missile->bIsHeld = true;
+		}
+	}
+}
+
+// ================= HOLD UPDATE =================
+void AMyPlayer::UpdateHeldObject()
+{
+	if (HeldObjects.Num() == 0) return;
+
+	FVector Pos = GetActorLocation() + GetActorForwardVector() * HoldDistance;
+
+	for (AActor* Obj : HeldObjects)
+	{
+		if (!Obj) continue;
+
+		Obj->SetActorLocation(Pos);
+		Obj->SetActorRotation(FRotator(0.f, GetControlRotation().Yaw, 0.f));
+	}
 }
