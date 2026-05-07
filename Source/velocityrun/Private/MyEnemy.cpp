@@ -101,33 +101,45 @@ void AMyEnemy::FacePlayer()
 
 void AMyEnemy::UpdateMovement(float DeltaTime)
 {
-	if (!bPlayerInRange || !bSpeedInitialized) return;
+	if (!bPlayerInRange) return;
 
 	UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(GetRootComponent());
 	if (!Body) return;
 
-	// ================= DIRECTION =================
+	FVector CurrentVel = Body->GetPhysicsLinearVelocity();
+
 	FVector MoveDir;
 
+	float TargetSpeed;
+
+	// ================= SPEED LOGIC SWAP =================
 	if (bMoveForwardInsteadOfBackward)
+	{
+		// FORWARD = FIXED SPEED 500
 		MoveDir = GetActorForwardVector();
+		TargetSpeed = 500.f;
+	}
 	else
+	{
+		// BACKWARD = PLAYER SPEED
 		MoveDir = -GetActorForwardVector();
+		TargetSpeed = CurrentSpeed;
+	}
 
 	MoveDir.Z = 0.f;
 	MoveDir.Normalize();
 
-	// ================= PHYSICS MOVE =================
-	FVector CurrentVel = Body->GetPhysicsLinearVelocity();
-
-	FVector TargetVel = MoveDir * CurrentSpeed;
-	TargetVel.Z = CurrentVel.Z; // keep gravity
+	FVector TargetVel = MoveDir * TargetSpeed;
+	TargetVel.Z = CurrentVel.Z;
 
 	FVector Force = (TargetVel - CurrentVel) * 8.0f;
 
 	Body->AddForce(Force, NAME_None, true);
 
-	// ================= SPEED DECAY =================
-	CurrentSpeed -= DecayRate * DeltaTime;
-	CurrentSpeed = FMath::Max(CurrentSpeed, 0.f);
+	// ================= ONLY DECAY PLAYER SPEED =================
+	if (!bMoveForwardInsteadOfBackward)
+	{
+		CurrentSpeed -= DecayRate * DeltaTime;
+		CurrentSpeed = FMath::Max(CurrentSpeed, 0.f);
+	}
 }
