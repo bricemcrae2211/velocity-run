@@ -5,6 +5,7 @@
 #include "MyMissile.generated.h"
 
 class UCapsuleComponent;
+class AMyPlayer; // ?? forward declare player
 
 UCLASS()
 class VELOCITYRUN_API AMyMissile : public AActor
@@ -20,31 +21,24 @@ protected:
 public:
 	virtual void Tick(float DeltaTime) override;
 
-	// ================= ROOT / PHYSICS =================
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	USceneComponent* SceneRoot;
-
+	// ================= ROOT =================
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	UCapsuleComponent* PhysicsBody;
 
 	// ================= STATE =================
-	UPROPERTY(EditAnywhere, Category = "Missile")
+// ================= STATE =================
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Missile")
 	bool IsHeld = false;
 
 private:
-	AActor* PlayerActor;
+	// ?? DIRECT PLAYER REFERENCE
+	AMyPlayer* PlayerRef;
 
 	UPROPERTY(EditAnywhere, Category = "Missile")
 	float TriggerDistance = 4000.f;
 
 	UPROPERTY(EditAnywhere, Category = "Missile")
 	float LaunchDelay = 3.f;
-
-	UPROPERTY(EditAnywhere, Category = "Missile")
-	float BackwardSpeed = 600.f;
-
-	UPROPERTY(EditAnywhere, Category = "Missile")
-	float ForwardSpeed = 2000.f;
 
 	FTimerHandle LaunchTimer;
 

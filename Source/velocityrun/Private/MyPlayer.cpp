@@ -1,12 +1,13 @@
-#include "MyPlayer.h"
+﻿#include "MyPlayer.h"
+
+
 #include "EnhancedInputSubsystems.h"
 #include "EnhancedInputComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
-#include "TimerManager.h"
-#include "Kismet/GameplayStatics.h"
-#include "EngineUtils.h"
 #include "MyMissile.h"
+#include "TimerManager.h"
+#include "EngineUtils.h"
 
 // ================= CONSTRUCTOR =================
 AMyPlayer::AMyPlayer()
@@ -18,6 +19,12 @@ AMyPlayer::AMyPlayer()
 	GetCapsuleComponent()->SetSimulatePhysics(true);
 	GetCapsuleComponent()->SetEnableGravity(false);
 
+	// ================= HOLD POINT =================
+	HoldPoint = CreateDefaultSubobject<USceneComponent>(TEXT("HoldPoint"));
+	HoldPoint->SetupAttachment(GetRootComponent());
+	HoldPoint->SetRelativeLocation(FVector(200.f, 0.f, 60.f));
+
+	// ================= MUZZLE =================
 	MuzzlePoint = CreateDefaultSubobject<USceneComponent>(TEXT("MuzzlePoint"));
 	MuzzlePoint->SetupAttachment(GetMesh());
 }
@@ -76,7 +83,6 @@ void AMyPlayer::Tick(float DeltaTime)
 
 	GetCapsuleComponent()->SetPhysicsLinearVelocity(Velocity);
 
-	// ================= GRAVITY GUN HOLD =================
 	if (HeldObjects.Num() > 0)
 	{
 		UpdateHeldObject();
@@ -89,7 +95,6 @@ void AMyPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
 	UEnhancedInputComponent* Input = Cast<UEnhancedInputComponent>(PlayerInputComponent);
-
 	if (!Input) return;
 
 	if (JetpackAction)
@@ -107,19 +112,14 @@ void AMyPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 	if (GravityGunAction)
 	{
 		Input->BindAction(GravityGunAction, ETriggerEvent::Started, this, &AMyPlayer::GravityGunPressed);
+		Input->BindAction(GravityGunAction, ETriggerEvent::Triggered, this, &AMyPlayer::GravityGunHeld);
+		Input->BindAction(GravityGunAction, ETriggerEvent::Completed, this, &AMyPlayer::GravityGunReleased);
 	}
 }
 
 // ================= JETPACK =================
-void AMyPlayer::JetpackStart()
-{
-	bIsFiring = true;
-}
-
-void AMyPlayer::JetpackStop()
-{
-	bIsFiring = false;
-}
+void AMyPlayer::JetpackStart() { bIsFiring = true; }
+void AMyPlayer::JetpackStop() { bIsFiring = false; }
 
 // ================= FIRE =================
 void AMyPlayer::StartFire()
@@ -129,13 +129,7 @@ void AMyPlayer::StartFire()
 	bIsShooting = true;
 	Fire();
 
-	GetWorldTimerManager().SetTimer(
-		FireTimerHandle,
-		this,
-		&AMyPlayer::Fire,
-		FireRate,
-		true
-	);
+	GetWorldTimerManager().SetTimer(FireTimerHandle, this, &AMyPlayer::Fire, FireRate, true);
 }
 
 void AMyPlayer::StopFire()
@@ -155,42 +149,128 @@ void AMyPlayer::Fire()
 	);
 }
 
-// ================= GRAVITY GUN =================
-void AMyPlayer::GravityGunPressed()
+void AMyPlayer::GravityGunReleased()
 {
-	// ================= RELEASE =================
-	if (HeldObjects.Num() > 0)
+	// if grab state is active → do nothing
+	if (bIsGrabed)
 	{
-		FVector PlayerVel = GetVelocity();
-		float PlayerSpeed = PlayerVel.Size();
-		FVector ForwardDir = GetActorForwardVector();
-
-		// one clean direction
-		FVector LaunchDir = (ForwardDir + PlayerVel.GetSafeNormal()).GetSafeNormal();
-
-		for (AActor* Obj : HeldObjects)
-		{
-			if (!Obj) continue;
-
-			if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Obj->GetRootComponent()))
-			{
-				Prim->SetSimulatePhysics(true);
-
-				// ?? FORCE BASED ON PLAYER SPEED
-				float TotalForce = (PlayerSpeed * SpeedMultiplier) + ExtraForce + 1000.f;
-
-				FVector FinalImpulse = LaunchDir * TotalForce;
-
-				// ignore mass ? strong throw
-				Prim->AddImpulse(FinalImpulse, NAME_None, true);
-			}
-		}
-
-		HeldObjects.Empty();
+		HoldTime = 0.f;
+		bIsHoldingButton = true;
 		return;
 	}
 
-	// ================= GRAB =================
+	// nothing to throw
+	if (HeldObjects.Num() <= 0)
+		return;
+
+	FVector PlayerVel = GetVelocity();
+	float PlayerSpeed = PlayerVel.Size();
+	FVector ForwardDir = GetActorForwardVector();
+
+	FVector LaunchDir =
+		(ForwardDir + PlayerVel.GetSafeNormal()).GetSafeNormal();
+
+	for (AActor* Obj : HeldObjects)
+	{
+		if (!Obj) continue;
+
+		if (UPrimitiveComponent* Prim =
+			Cast<UPrimitiveComponent>(Obj->GetRootComponent()))
+		{
+			Prim->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			Prim->SetSimulatePhysics(true);
+
+			float Force =
+				(PlayerSpeed * SpeedMultiplier) +
+				ExtraForce +
+				1000.f;
+
+			Prim->AddImpulse(LaunchDir * Force, NAME_None, true);
+		}
+	}
+
+	HeldObjects.Empty();
+}
+void AMyPlayer::GravityGunHeld()
+{
+	HoldTime += GetWorld()->GetDeltaSeconds();
+
+	// optional delay before activation
+	if (HoldTime < 0.3f)
+		return;
+
+	// if already grabbing, don't throw
+	if (bIsGrabed && !bIsHoldingButton)
+		return;
+
+	// nothing to throw
+	if (HeldObjects.Num() <= 0)
+		return;
+
+	FVector PlayerVel = GetVelocity();
+	float PlayerSpeed = PlayerVel.Size();
+	FVector ForwardDir = GetActorForwardVector();
+
+	FVector LaunchDir =
+		(ForwardDir + PlayerVel.GetSafeNormal()).GetSafeNormal();
+
+	for (AActor* Obj : HeldObjects)
+	{
+		if (!Obj) continue;
+
+		if (UPrimitiveComponent* Prim =
+			Cast<UPrimitiveComponent>(Obj->GetRootComponent()))
+		{
+			Prim->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			Prim->SetSimulatePhysics(true);
+
+			float Force =
+				(PlayerSpeed * SpeedMultiplier) +
+				ExtraForce +
+				1000.f;
+
+			// ===================== LINEAR FORCE =====================
+			Prim->AddImpulse(LaunchDir * Force, NAME_None, true);
+
+			// ===================== RANDOM ANGULAR FORCE =====================
+
+			// random rotation axis in ANY direction
+			FVector RandomAxis = FMath::VRand().GetSafeNormal();
+
+			// random spin strength
+			float MinSpin = Force * 0.2f;
+			float MaxSpin = Force * 1.5f;
+			float RandomSpin = FMath::FRandRange(MinSpin, MaxSpin);
+
+			// random flip direction (clockwise / counterclockwise)
+			float Direction = FMath::RandBool() ? 1.f : -1.f;
+
+			// FINAL SPIN
+			Prim->AddAngularImpulseInDegrees(
+				RandomAxis * RandomSpin * Direction,
+				NAME_None,
+				true
+			);
+		}
+	}
+
+	HeldObjects.Empty();
+}
+// ================= GRAVITY GUN =================
+void AMyPlayer::GravityGunPressed()
+{
+	// holding object already = arm throw
+	if (HeldObjects.Num() > 0)
+	{
+		bIsHoldingButton = false;
+		HoldTime = 0.f;
+		bIsGrabed = false;
+		return;
+	}
+
+	// first grab
+	bIsGrabed = true;
+
 	AActor* Closest = nullptr;
 	float BestDist = GrabRange;
 
@@ -199,25 +279,17 @@ void AMyPlayer::GravityGunPressed()
 		AActor* A = *It;
 		if (!A || A == this) continue;
 
-		bool bIsHoldable = false;
-
 		for (TSubclassOf<AActor> Type : HoldableObjects)
 		{
-			if (A->IsA(Type))
+			if (!A->IsA(Type)) continue;
+
+			float Dist = FVector::Dist(GetActorLocation(), A->GetActorLocation());
+
+			if (Dist < BestDist)
 			{
-				bIsHoldable = true;
-				break;
+				BestDist = Dist;
+				Closest = A;
 			}
-		}
-
-		if (!bIsHoldable) continue;
-
-		float Dist = FVector::Dist(GetActorLocation(), A->GetActorLocation());
-
-		if (Dist < BestDist)
-		{
-			BestDist = Dist;
-			Closest = A;
 		}
 	}
 
@@ -228,12 +300,12 @@ void AMyPlayer::GravityGunPressed()
 		if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Closest->GetRootComponent()))
 		{
 			Prim->SetSimulatePhysics(false);
+			Prim->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		}
 
-		// ?? mark missile as held (never reset)
 		if (AMyMissile* Missile = Cast<AMyMissile>(Closest))
 		{
-			Missile->bIsHeld = true;
+			Missile->IsHeld = true;
 		}
 	}
 }
@@ -241,15 +313,19 @@ void AMyPlayer::GravityGunPressed()
 // ================= HOLD UPDATE =================
 void AMyPlayer::UpdateHeldObject()
 {
-	if (HeldObjects.Num() == 0) return;
+	if (!HoldPoint) return;
 
-	FVector Pos = GetActorLocation() + GetActorForwardVector() * HoldDistance;
+	FVector TargetPos = HoldPoint->GetComponentLocation();
+	FRotator TargetRot = HoldPoint->GetComponentRotation();
 
 	for (AActor* Obj : HeldObjects)
 	{
 		if (!Obj) continue;
 
-		Obj->SetActorLocation(Pos);
-		Obj->SetActorRotation(FRotator(0.f, GetControlRotation().Yaw, 0.f));
+		if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Obj->GetRootComponent()))
+		{
+			Prim->SetWorldLocation(TargetPos);
+			Prim->SetWorldRotation(TargetRot);
+		}
 	}
 }

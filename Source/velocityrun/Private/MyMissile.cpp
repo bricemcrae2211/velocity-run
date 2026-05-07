@@ -1,60 +1,67 @@
 #include "MyMissile.h"
+#include "MyPlayer.h"
 #include "Kismet/GameplayStatics.h"
+#include "Components/CapsuleComponent.h"
 #include "Engine/Engine.h"
 #include "TimerManager.h"
-#include "Components/CapsuleComponent.h"
 
 AMyMissile::AMyMissile()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
-	// Root = capsule (collision)
-	SetRootComponent(CreateDefaultSubobject<UCapsuleComponent>(TEXT("Root")));
+	PhysicsBody = CreateDefaultSubobject<UCapsuleComponent>(TEXT("PhysicsBody"));
+	SetRootComponent(PhysicsBody);
+
+	PhysicsBody->SetSimulatePhysics(false);
+	PhysicsBody->SetEnableGravity(false);
 }
 
 void AMyMissile::BeginPlay()
 {
 	Super::BeginPlay();
 
-	PlayerActor = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
+	PlayerRef = Cast<AMyPlayer>(
+		UGameplayStatics::GetPlayerPawn(GetWorld(), 0)
+	);
 }
 
 void AMyMissile::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	if (!PlayerActor) return;
+	if (!PlayerRef)
+		return;
 
-	UCapsuleComponent* Root = Cast<UCapsuleComponent>(GetRootComponent());
-	if (!Root) return;
-
-	// ================= HELD MODE =================
+	// ================= HELD =================
 	if (IsHeld)
 	{
-		Root->SetSimulatePhysics(true);
-		Root->SetEnableGravity(true);
-
-		// IMPORTANT: stop AI movement completely
+		PhysicsBody->SetSimulatePhysics(true);
+		PhysicsBody->SetEnableGravity(true);
 		return;
 	}
 
-	// ================= NOT HELD =================
-	// DO NOTHING (as you requested)
-	// AI continues normally below
+	// ================= ALWAYS MATCH PLAYER SPEED =================
+	// THIS IS THE IMPORTANT PART
+	float PlayerSpeed = PlayerRef->CurrentMaxSpeed;
 
-	float Distance = FVector::Dist(GetActorLocation(), PlayerActor->GetActorLocation());
+	// ================= DISTANCE CHECK =================
+	float Distance = FVector::Dist(
+		GetActorLocation(),
+		PlayerRef->GetActorLocation()
+	);
 
-	// ================= TRIGGER =================
 	if (!bTriggered && Distance <= TriggerDistance)
 	{
 		bTriggered = true;
 
 		PrintInRange();
 
-		FVector Direction = PlayerActor->GetActorLocation() - GetActorLocation();
-		Direction.Z = 0.f;
+		FVector Dir =
+			PlayerRef->GetActorLocation() - GetActorLocation();
 
-		SetActorRotation(Direction.Rotation());
+		Dir.Z = 0.f;
+
+		SetActorRotation(Dir.Rotation());
 
 		bMovingBackward = true;
 
@@ -67,22 +74,28 @@ void AMyMissile::Tick(float DeltaTime)
 		);
 	}
 
-	// ================= BACKWARD =================
+	// ================= MOVE BACKWARD =================
+	// EXACT SAME SPEED AS PLAYER
 	if (bMovingBackward && !bLaunched)
 	{
-		AddActorWorldOffset(
-			-GetActorForwardVector() * BackwardSpeed * DeltaTime,
-			true
-		);
+		FVector Move =
+			-GetActorForwardVector() *
+			PlayerSpeed *
+			DeltaTime;
+
+		AddActorWorldOffset(Move, true);
 	}
 
-	// ================= FORWARD =================
+	// ================= LAUNCH FORWARD =================
+	// EXACT SAME SPEED AS PLAYER
 	if (bLaunched)
 	{
-		AddActorWorldOffset(
-			GetActorForwardVector() * ForwardSpeed * DeltaTime,
-			true
-		);
+		FVector Move =
+			GetActorForwardVector() *
+			PlayerSpeed *
+			DeltaTime;
+
+		AddActorWorldOffset(Move, true);
 	}
 }
 

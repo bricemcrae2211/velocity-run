@@ -1,6 +1,7 @@
 #include "MyEnemy.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Components/CapsuleComponent.h"
 
 AMyEnemy::AMyEnemy()
 {
@@ -13,6 +14,17 @@ AMyEnemy::AMyEnemy()
 	GetCharacterMovement()->SetPlaneConstraintNormal(FVector(0, 1, 0));
 
 	GetCharacterMovement()->MaxWalkSpeed = 999999.f;
+
+	// ================= PHYSICS MODE =================
+	GetCharacterMovement()->DisableMovement();
+
+	GetCapsuleComponent()->SetSimulatePhysics(true);
+	GetCapsuleComponent()->SetEnableGravity(true);
+	GetCapsuleComponent()->SetLinearDamping(2.5f);
+	GetCapsuleComponent()->SetAngularDamping(10.f);
+
+	// ================= FACE ONCE FLAG =================
+	bHasFacedPlayer = false;
 }
 
 void AMyEnemy::BeginPlay()
@@ -31,28 +43,43 @@ void AMyEnemy::Tick(float DeltaTime)
 	// ================= RANGE CHECK =================
 	float Distance = FVector::Dist(GetActorLocation(), Player->GetActorLocation());
 
-	// ?? ADDED: SAME Z LEVEL CHECK
 	float ZDiff = FMath::Abs(GetActorLocation().Z - Player->GetActorLocation().Z);
 	bPlayerSameLevel = (ZDiff <= ZTolerance);
 
-	// enter range once
+	// ================= FRONT CHECK (ADDED) =================
+	FVector ToPlayer = Player->GetActorLocation() - GetActorLocation();
+	ToPlayer.Z = 0.f;
+
+	FVector Forward = GetActorForwardVector();
+	Forward.Z = 0.f;
+
+	ToPlayer.Normalize();
+	Forward.Normalize();
+
+	float Dot = FVector::DotProduct(Forward, ToPlayer);
+	bPlayerInFront = Dot > FrontDotThreshold;
+
+	// ================= ENTER RANGE =================
 	if (!bPlayerInRange && Distance <= DetectionRange)
 	{
 		bPlayerInRange = true;
 
-		// ?? KEY FIX: COPY PLAYER SPEED ON ENTRY
 		const FVector PlayerVel = Player->GetVelocity();
 		CurrentSpeed = PlayerVel.Size();
 
 		if (CurrentSpeed < 500.f)
-		{
-			CurrentSpeed = 500.f; // fallback
-		}
+			CurrentSpeed = 500.f;
 
 		bSpeedInitialized = true;
 	}
 
-	FacePlayer();
+	// ================= FACE ONLY ONCE =================
+	if (bPlayerInRange && !bHasFacedPlayer)
+	{
+		FacePlayer();
+		bHasFacedPlayer = true;
+	}
+
 	UpdateMovement(DeltaTime);
 }
 
@@ -61,7 +88,9 @@ void AMyEnemy::FacePlayer()
 	if (!Player) return;
 
 	FVector Dir = Player->GetActorLocation() - GetActorLocation();
-	Dir.Y = 0.f;
+	Dir.Z = 0.f;
+
+	if (Dir.IsNearlyZero()) return;
 
 	FRotator Rot = Dir.Rotation();
 	Rot.Pitch = 0.f;
@@ -72,23 +101,33 @@ void AMyEnemy::FacePlayer()
 
 void AMyEnemy::UpdateMovement(float DeltaTime)
 {
-	if (!bPlayerInRange || !bSpeedInitialized)
-	{
-		GetCharacterMovement()->Velocity = FVector::ZeroVector;
-		return;
-	}
+	if (!bPlayerInRange || !bSpeedInitialized) return;
 
-	// ================= MOVE BACKWARD =================
-	FVector BackDir = -GetActorForwardVector();
-	FVector Velocity = BackDir * CurrentSpeed;
+	UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(GetRootComponent());
+	if (!Body) return;
 
-	// ================= DECAY SPEED =================
+	// ================= DIRECTION =================
+	FVector MoveDir;
+
+	if (bMoveForwardInsteadOfBackward)
+		MoveDir = GetActorForwardVector();
+	else
+		MoveDir = -GetActorForwardVector();
+
+	MoveDir.Z = 0.f;
+	MoveDir.Normalize();
+
+	// ================= PHYSICS MOVE =================
+	FVector CurrentVel = Body->GetPhysicsLinearVelocity();
+
+	FVector TargetVel = MoveDir * CurrentSpeed;
+	TargetVel.Z = CurrentVel.Z; // keep gravity
+
+	FVector Force = (TargetVel - CurrentVel) * 8.0f;
+
+	Body->AddForce(Force, NAME_None, true);
+
+	// ================= SPEED DECAY =================
 	CurrentSpeed -= DecayRate * DeltaTime;
-
-	if (CurrentSpeed < 0.f)
-	{
-		CurrentSpeed = 0.f;
-	}
-
-	GetCharacterMovement()->Velocity = Velocity;
+	CurrentSpeed = FMath::Max(CurrentSpeed, 0.f);
 }
