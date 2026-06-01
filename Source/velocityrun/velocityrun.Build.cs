@@ -16,7 +16,8 @@ public class velocityrun : ModuleRules
     "InputCore",
     "EnhancedInput",
     "AIModule",
-    "NavigationSystem"
+    "NavigationSystem",
+    "UMG"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[] {  });
